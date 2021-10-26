@@ -1,0 +1,280 @@
+/**************************************************************************
+
+A simple arduino chronometer using a rotary encoder and LCD display.
+
+
+Connections:
+  Push button         ->  D2 + GND
+  Encoder A           ->  D8
+  Encoder B           ->  D9
+  Encoder Center      ->  GND
+  LCD 128x32 I2C      ->  VCC + GND + SCL + SDA
+  Resistor (220 Ohm)  ->  D10 + Buzzer(+)
+  Buzzer              ->  Resistor + GND
+
+**************************************************************************/
+
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <TimerOne.h>
+
+#define SCREEN_WIDTH 128        // OLED display width, in pixels
+#define SCREEN_HEIGHT 32        // OLED display height, in pixels
+#define OLED_RESET 4
+#define PERIOD_MS 1000000
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+byte AInput = 8;
+byte BInput = 9;
+byte ButtonInput = 2;
+byte Buzzer = 10;
+
+byte lastState = 0;
+int  cw = 0;
+byte AState = 0;
+byte BState = 0;
+byte State = 0;
+
+volatile int minutes = 0;
+volatile int seconds = 0;
+char screen[10];
+volatile bool TimerActive = false;
+volatile byte machinestate = 0;
+
+// Button interrupt function
+void changeState()
+{
+    static unsigned long last_interrupt_time = 0;
+    unsigned long interrupt_time = millis();
+
+    if (interrupt_time - last_interrupt_time > 200)
+    {
+            if (machinestate == 2 || machinestate == 3)
+              machinestate = 0;
+            else if (machinestate == 1 && minutes == 0 && seconds == 0)
+              machinestate = 0;
+            else
+            {
+                machinestate++;
+            }
+    }
+    last_interrupt_time = interrupt_time;
+}
+
+// Timer callback function
+void action()
+{
+    if (seconds == 0)
+    {
+        if (minutes == 0)
+        {
+            machinestate = 3;
+            // stop counter
+            TimerActive = false;
+            Timer1.stop();
+        }
+        else
+        {
+          seconds = 59;
+          minutes--;
+        }
+    }
+    else
+        seconds--;
+}
+
+// Read encoder function
+// return rotation direction 
+int readEncoder()
+{
+    AState = digitalRead(AInput);
+    BState = digitalRead(BInput) << 1;
+    State = AState | BState;
+    cw = 0;
+    if (lastState != State)
+    {
+        switch (State)
+        {
+            case 0:
+            if (lastState == 2)
+            {
+                cw = 1;
+            }
+            else if (lastState == 1)
+            {
+                cw = -1;
+            }
+            break;
+            case 1:
+            if (lastState == 0)
+            {
+                cw = 1;
+            }
+            else if(lastState == 3)
+            {
+                cw = -1;
+            }
+            break;
+            case 2:
+            if (lastState == 3)
+            {
+                cw = 1;
+            }
+            else if(lastState == 0)
+            {
+                cw = -1;
+            }
+            break;
+            case 3:
+            if (lastState == 1)
+            {
+                cw = 1;
+            }
+            else if(lastState == 2)
+            {
+                cw = -1;
+            }
+            break;
+        }
+    }
+    lastState = State;
+   
+    delay(1);
+    return cw;
+}
+
+void setup() 
+{
+    
+    pinMode(AInput, INPUT_PULLUP);
+    pinMode(BInput, INPUT_PULLUP);
+    pinMode(ButtonInput, INPUT_PULLUP);
+
+    attachInterrupt(digitalPinToInterrupt(ButtonInput), changeState, RISING  );
+ 
+    if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) 
+    { 
+        // Address 0x3C for 128x32
+        for(;;); // Don't proceed, loop forever
+    }
+
+    display.clearDisplay();
+}
+
+void loop() 
+{
+         
+    switch (machinestate)
+    {
+        case 0:                                                             // Initial state (SET minutes)
+        TimerActive = false;
+        Timer1.stop();
+        setMinutes(readEncoder());
+        draw();
+        break;
+        case 1:                                                             // (SET seconds)                                         
+        setSeconds(readEncoder());
+        draw();
+        break;
+        case 2:                                                             // Running
+        draw();
+        if (TimerActive == false)
+        {
+          Timer1.initialize(PERIOD_MS);
+          Timer1.attachInterrupt(action);
+          TimerActive = true;
+        }
+        break;
+        case 3:                                                             // Alarm!!
+        draw();
+        for (int i = 0 ; i< 3 ;i++)
+        {
+          tone(10,1100,200);
+          delay(250);
+          tone(10,1100,200);
+          delay(250);
+          tone(10,1100,200);
+          delay(500);
+        }
+        machinestate = 0;
+        break;
+    }
+   
+}
+
+// Set minutes function
+void setMinutes(int st) 
+{
+    if (st == 1)          // up count
+    {
+        minutes = (minutes == 99) ? 0 : minutes+1;
+    }
+    else if (st == -1)    // down count
+    {
+        minutes = (minutes == 0) ? 99 : minutes-1;
+    }
+}
+
+// Set seconds function
+void setSeconds(int st)
+{
+    if (st == 1)          // up count
+    {
+        seconds = (seconds == 59) ? 0 : seconds+1;
+    }
+    else if (st == -1)    // down count
+    {
+        seconds = (seconds == 0) ? 59 : seconds-1;
+    }
+}
+
+// Display function
+void draw(void) 
+{
+    display.clearDisplay();
+    display.setTextSize(1);                   
+    display.setTextColor(SSD1306_WHITE);        
+    display.setCursor(0,0);                     
+    switch (machinestate)
+    {
+        case 0:                                                                 // SET Minutes
+            display.println(F("SET Minutes"));
+            display.setTextSize(2);                                             
+            display.setTextColor(SSD1306_WHITE);
+            display.print("   ");
+            display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);                 
+            snprintf(screen, sizeof(screen), "%.2d",minutes);
+            display.print(screen);
+            display.setTextColor(SSD1306_WHITE);
+            snprintf(screen, sizeof(screen), ":%.2d",seconds);
+            display.println(screen);
+            break;
+        case 1:                                                                 // SET Seconds
+            display.println(F("SET Seconds"));
+            display.setTextSize(2);                                             
+            display.setTextColor(SSD1306_WHITE);
+            snprintf(screen, sizeof(screen), "   %.2d:",minutes);
+            display.print(screen);
+            display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);                 
+            snprintf(screen, sizeof(screen), "%.2d",seconds);
+            display.println(screen);
+            break;
+        case 2:                                                                 // Running
+            display.println(F("Running"));
+            display.setTextSize(2);                                             
+            display.setTextColor(SSD1306_WHITE);                
+            snprintf(screen, sizeof(screen), "   %.2d:%.2d",minutes,seconds);
+            display.println(screen);
+            break;
+        case 3:                                                                 // Alarm
+            display.println();
+            display.setTextSize(2);                                             
+            display.setTextColor(SSD1306_WHITE); 
+            display.print(F("  "));
+            display.println(F("ALARM!!"));
+            break;
+    }
+    display.display();
+}
